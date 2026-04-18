@@ -2,10 +2,6 @@
 
 A beautiful, interactive timezone coordination tool for teams spread across the globe. Scrub through time, see what everyone's doing at a glance, and plan across timezones without friction.
 
-![Meridian Desktop](screenshots/desktop.png)
-
----
-
 ## Getting Started
 
 No build step required. Open directly in any modern browser:
@@ -18,7 +14,6 @@ Or serve locally:
 
 ```bash
 npx serve .
-# -> http://localhost:3000
 ```
 
 ## Usage
@@ -37,32 +32,18 @@ npx serve .
 
 ```
 .
-├── index.html          # Entry point — loads deps, mounts React
-├── src/
-│   ├── hook.jsx        # useTimezones — state, math, TZ_LIBRARY (50+ cities)
-│   ├── app.jsx         # Root component, layout (desktop + mobile)
-│   ├── cards.jsx       # TimeCard — tinted comparison cards
-│   ├── circle.jsx      # CircleControl — 24-hour full-dial
-│   ├── semicircle.jsx  # SemicircleControl — 12-hour arc dial
-│   └── picker.jsx      # TimezonePicker — popover (desktop) + sheet (mobile)
-└── screenshots/
-    └── desktop.png
+├── index.html      # Entry point — loads deps, mounts React
+└── src/
+    └── app.jsx     # Entire app in one file (hook, components, layout)
 ```
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| UI | React 18 (UMD, no build step) |
-| Animation | Framer Motion 11 |
-| Styling | Tailwind CSS (CDN) + CSS custom properties |
-| Color | OKLch perceptual color model |
-| Fonts | Inter, Instrument Serif, JetBrains Mono |
-| Transpilation | Babel standalone (in-browser) |
+React 18 (UMD), Framer Motion 11, Tailwind CSS (CDN), Babel standalone, OKLch color, Google Fonts (Inter, Instrument Serif, JetBrains Mono).
 
 ## Adding Cities
 
-Edit `TZ_LIBRARY` in `src/hook.jsx`. Each entry needs:
+Edit `TZ_LIBRARY` in `src/app.jsx`:
 
 ```js
 { id: 'America/Chicago', city: 'Chicago', country: 'USA', code: 'ORD' }
@@ -72,7 +53,7 @@ Edit `TZ_LIBRARY` in `src/hook.jsx`. Each entry needs:
 
 ## Theming
 
-CSS variables are defined at the top of `index.html`. Accent color can also be changed at runtime via the Settings panel.
+CSS variables are defined at the top of `index.html`.
 
 ## Known Limitations
 
