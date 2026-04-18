@@ -1117,6 +1117,13 @@ function TimezonePlannerApp() {
       </section>
       <TimezonePicker open={picker !== null} variant="sheet" onClose={closePicker}
         title={pickerTitle} excludeIds={pickerExcludes} onSelect={handlePickerSelect} />
+      <footer className="pb-8 pt-2 text-center relative z-10">
+        <a href="https://samirhusain.info" target="_blank" rel="noopener noreferrer"
+          className="font-mono text-[10px] uppercase tracking-[0.2em]"
+          style={{ color: 'var(--fg-faint)' }}>
+          developed by samir husain
+        </a>
+      </footer>
     </div>
   );
 }
