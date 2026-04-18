@@ -442,7 +442,7 @@ function TimezonePicker({
     return (
       <AnimatePresence>
         {open && (
-          <React.Fragment>
+          <React.Fragment key="popover">
             <motion.div key="pop-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={onClose} className="fixed inset-0 z-40" style={{ background: 'transparent' }} />
             <motion.div key="pop"
