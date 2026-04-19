@@ -1,0 +1,17 @@
+{
+  "name": "Meridian — Timezone Planner",
+  "short_name": "Meridian",
+  "description": "Plan across time zones with ease.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#28210f",
+  "theme_color": "#28210f",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

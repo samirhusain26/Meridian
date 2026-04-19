@@ -120,6 +120,43 @@ const TZ_LIBRARY = [
 
 const TZ_IDS = new Set(TZ_LIBRARY.map(t => t.id));
 
+// ─── City Library (lazy-loaded from data/cities.json) ────────────────────────
+
+let _mergedLibrary = null;
+
+function buildLibrary(raw) {
+  const seenUids = new Set(TZ_LIBRARY.map(t => t.id + '|' + t.city));
+  const extra = [];
+  for (const e of raw) {
+    const uid = e.timezone + '|' + e.city;
+    if (seenUids.has(uid)) continue;
+    seenUids.add(uid);
+    extra.push({ uid, id: e.timezone, city: e.city, country: e.country, code: typeof e.iso2 === 'string' ? e.iso2 : '' });
+  }
+  return [...TZ_LIBRARY.map(t => ({ ...t, uid: t.id + '|' + t.city })), ...extra];
+}
+
+function useCityLibrary() {
+  const [cities, setCities] = useState(() => {
+    if (_mergedLibrary) return _mergedLibrary;
+    if (window.CITIES_DATA) {
+      _mergedLibrary = buildLibrary(window.CITIES_DATA);
+      return _mergedLibrary;
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (cities) return;
+    fetch('./data/cities.json').then(r => r.json()).then(raw => {
+      _mergedLibrary = buildLibrary(raw);
+      setCities(_mergedLibrary);
+    }).catch(() => setCities(TZ_LIBRARY));
+  }, []);
+
+  return { cities: cities || TZ_LIBRARY, loading: cities === null };
+}
+
 // ─── Timezone Utilities ──────────────────────────────────────────────────────
 
 function partsIn(date, tz) {
@@ -139,8 +176,18 @@ function minutesInTz(date, tz) {
   return p.hour * 60 + p.minute;
 }
 
-function findTz(id) {
-  return TZ_LIBRARY.find(t => t.id === id)
+function tzIdFromStored(stored) {
+  const pipe = stored.indexOf('|');
+  return pipe === -1 ? stored : stored.slice(0, pipe);
+}
+function findTz(stored) {
+  const lib = _mergedLibrary || TZ_LIBRARY;
+  if (stored.includes('|')) {
+    const found = lib.find(t => (t.uid ?? (t.id + '|' + t.city)) === stored);
+    if (found) return found;
+  }
+  const id = tzIdFromStored(stored);
+  return lib.find(t => t.id === id)
     || { id, city: id, country: '', code: id.slice(0, 3).toUpperCase() };
 }
 
@@ -176,7 +223,7 @@ function useTimezones() {
   const [now, setNow] = useState(() => new Date());
   const [anchorId, setAnchorId] = useState(() => loadStored('anchorId', null) || defaultAnchorId());
   const [comparisons, setComparisons] = useState(() =>
-    loadStored('comparisons', ['America/Denver', 'America/Chicago', 'America/Los_Angeles', 'Europe/London', 'Asia/Dubai', 'Asia/Kolkata'])
+    loadStored('comparisons', ['America/Los_Angeles', 'Asia/Kolkata', 'Asia/Dubai', 'Europe/London'])
   );
   const [anchorMinutes, setAnchorMinutes] = useState(() => minutesInTz(new Date(), loadStored('anchorId', null) || defaultAnchorId()));
   const [dayOffset, setDayOffset] = useState(0);
@@ -239,32 +286,38 @@ function useTimezones() {
     setDayOffset(0);
   }, [anchorId]);
 
-  const setAnchor = useCallback((id) => {
+  const setAnchor = useCallback((stored) => {
+    const id = tzIdFromStored(stored);
     setAnchorId(id);
     setFollowLive(true);
     setAnchorMinutes(minutesInTz(new Date(), id));
     setDayOffset(0);
   }, []);
 
-  const swapAnchor = useCallback((compareId) => {
-    setComparisons(prev => prev.map(id => id === compareId ? anchorId : id));
-    const newAnchorMins = anchorMinutes + offsetBetween(anchorId, compareId);
-    setAnchorId(compareId);
+  const swapAnchor = useCallback((stored) => {
+    const tzId = tzIdFromStored(stored);
+    setComparisons(prev => prev.map(s => s === stored ? anchorId : s));
+    const newAnchorMins = anchorMinutes + offsetBetween(anchorId, tzId);
+    setAnchorId(tzId);
     setAnchorMinutes(((newAnchorMins % 1440) + 1440) % 1440);
   }, [anchorId, anchorMinutes, offsetBetween]);
 
-  const removeComparison = useCallback((id) => {
-    setComparisons(prev => prev.filter(c => c !== id));
+  const removeComparison = useCallback((stored) => {
+    setComparisons(prev => prev.filter(s => s !== stored));
   }, []);
 
   return {
     now, anchor: findTz(anchorId), anchorMinutes, dayOffset,
-    comparisons: comparisons.map(id => ({
-      tz: findTz(id),
-      minutes: minutesInCompare(id),
-      dayDelta: dayDelta(id) + dayOffset,
-      offsetFromAnchor: offsetBetween(anchorId, id),
-    })),
+    comparisons: comparisons.map(stored => {
+      const id = tzIdFromStored(stored);
+      return {
+        stored,
+        tz: findTz(stored),
+        minutes: minutesInCompare(id),
+        dayDelta: dayDelta(id) + dayOffset,
+        offsetFromAnchor: offsetBetween(anchorId, id),
+      };
+    }),
     comparisonsIds: comparisons, followLive,
     scrub, toggleAMPM, goLive, setAnchor, swapAnchor, setComparisons, removeComparison,
   };
@@ -328,15 +381,15 @@ function TimeCard({ tz, minutes, dayDelta, onSelect, onRemove, isAnchor }) {
     <div className="relative w-full"
          onMouseEnter={() => setHovered(true)}
          onMouseLeave={() => setHovered(false)}>
-    {onRemove && hovered && (
+    {onRemove && (
       <button
-        onClick={(e) => { e.stopPropagation(); onRemove(tz.id); }}
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
         className="absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full flex items-center justify-center"
         style={{
-          background: 'oklch(0.15 0.02 50 / 0.7)',
-          backdropFilter: 'blur(4px)',
-          color: 'oklch(0.85 0.01 80)',
-          border: '1px solid oklch(1 0 0 / 0.12)',
+          background: t.bg2,
+          filter: 'brightness(0.75)',
+          color: t.fgDim,
+          border: `1px solid ${t.fg}22`,
         }}
         title="Remove city"
       >
@@ -396,7 +449,7 @@ function TimeCard({ tz, minutes, dayDelta, onSelect, onRemove, isAnchor }) {
 
 function TimezonePicker({
   open, onClose, onSelect, excludeIds = [], title = 'Choose a city',
-  variant = 'sheet', anchorRect = null,
+  variant = 'sheet', anchorRect = null, cityLibrary = TZ_LIBRARY,
 }) {
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(0);
@@ -407,18 +460,36 @@ function TimezonePicker({
     else setTimeout(() => inputRef.current?.focus(), 30);
   }, [open]);
 
-  const list = TZ_LIBRARY.filter(tz => {
-    if (excludeIds.includes(tz.id)) return false;
-    if (!query) return true;
+  const list = useMemo(() => {
+    const excludeUids = new Set(
+      excludeIds.map(stored => {
+        if (stored.includes('|')) return stored;
+        const m = cityLibrary.find(t => t.id === stored);
+        return m ? (m.uid ?? m.id) : stored;
+      })
+    );
+    const base = cityLibrary.filter(tz => !excludeUids.has(tz.uid ?? tz.id));
+    if (!query) return base.slice(0, 100);
     const q = query.toLowerCase();
-    return tz.city.toLowerCase().includes(q)
-        || tz.country.toLowerCase().includes(q)
-        || tz.code.toLowerCase().includes(q);
-  });
+    const ranked = [];
+    for (const tz of base) {
+      const cityLow = tz.city.toLowerCase();
+      const codeLow = (tz.code || '').toLowerCase();
+      let rank;
+      if (cityLow.startsWith(q)) rank = 1;
+      else if (cityLow.includes(q)) rank = 2;
+      else if (tz.country.toLowerCase().includes(q)) rank = 3;
+      else if (codeLow.includes(q)) rank = 4;
+      else continue;
+      ranked.push({ tz, rank });
+    }
+    ranked.sort((a, b) => a.rank - b.rank || a.tz.city.localeCompare(b.tz.city));
+    return ranked.map(r => r.tz);
+  }, [query, cityLibrary, excludeIds]);
 
   useEffect(() => { setHighlight(h => Math.min(h, Math.max(0, list.length - 1))); }, [list.length]);
 
-  const pickHighlight = () => { const tz = list[highlight]; if (tz) onSelect(tz.id); };
+  const pickHighlight = () => { const tz = list[highlight]; if (tz) onSelect(tz.uid ?? tz.id); };
   const onKey = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setHighlight(h => Math.min(list.length - 1, h + 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(h => Math.max(0, h - 1)); }
@@ -470,7 +541,7 @@ function TimezonePicker({
               </div>
               <div className="overflow-y-auto no-scrollbar py-1" style={{ flex: 1 }}>
                 {list.slice(0, 40).map((tz, i) => (
-                  <button key={tz.id} onMouseEnter={() => setHighlight(i)} onClick={() => onSelect(tz.id)}
+                  <button key={tz.uid ?? tz.id} onMouseEnter={() => setHighlight(i)} onClick={() => onSelect(tz.uid ?? tz.id)}
                     className="w-full px-3 py-2 flex items-center justify-between text-left"
                     style={{ background: i === highlight ? 'var(--bg-card)' : 'transparent', transition: 'background 60ms ease' }}>
                     <div className="min-w-0">
@@ -522,8 +593,8 @@ function TimezonePicker({
               style={{ background: 'var(--bg-card)', border: '1px solid var(--line)', color: 'var(--fg)' }} />
           </div>
           <div className="overflow-y-auto no-scrollbar pb-8" style={{ maxHeight: '50vh' }}>
-            {list.map(tz => (
-              <button key={tz.id} onClick={() => onSelect(tz.id)}
+            {list.slice(0, 60).map(tz => (
+              <button key={tz.uid ?? tz.id} onClick={() => onSelect(tz.uid ?? tz.id)}
                 className="w-full px-5 py-3 flex items-center justify-between text-left transition-colors"
                 style={{ borderTop: '1px solid var(--line-soft)' }}
                 onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card)'}
@@ -890,6 +961,7 @@ function CircleControl({ anchorMinutes, onScrub, onToggleAMPM }) {
 
 function TimezonePlannerApp() {
   const tz = useTimezones();
+  const { cities: cityLibrary } = useCityLibrary();
 
   const [picker, setPicker] = useState(null);
   const openPicker = (p, evt) => {
@@ -929,15 +1001,15 @@ function TimezonePlannerApp() {
       timeZone: tz.anchor.id, weekday: 'short', month: 'short', day: 'numeric',
     }).format(anchorDate).replace(',', '');
 
-    const fmtEntry = (code, mins, delta) => {
+    const fmtEntry = (name, mins, delta) => {
       const f = formatMinutes(mins);
       const time = `${f.h12}:${f.mm}${f.ampm === 'AM' ? 'a' : 'p'}`;
-      const offset = delta !== 0 ? ` ${delta > 0 ? '+' : ''}${delta}` : '';
-      return `${code} ${time}${offset}`;
+      const offset = delta !== 0 ? ` (${delta > 0 ? '+' : ''}${delta})` : '';
+      return `• ${name} ${time}${offset}`;
     };
 
-    const text = [shortDate, fmtEntry(tz.anchor.code, tz.anchorMinutes, tz.dayOffset),
-      ...tz.comparisons.map(c => fmtEntry(c.tz.code, c.minutes, c.dayDelta))].join(' · ');
+    const text = [shortDate, fmtEntry(tz.anchor.city, tz.anchorMinutes, tz.dayOffset),
+      ...tz.comparisons.map(c => fmtEntry(c.tz.city, c.minutes, c.dayDelta))].join('\n');
 
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
@@ -1044,18 +1116,13 @@ function TimezonePlannerApp() {
 
   // ── DESKTOP ──
   if (isDesktop) {
-    const normalized = tz.comparisons.map(c => {
-      let off = c.offsetFromAnchor;
-      if (off > 720) off -= 1440;
-      if (off <= -720) off += 1440;
-      return { ...c, normOff: off };
-    });
-    const westComps = normalized.filter(c => c.normOff < 0).sort((a, b) => a.normOff - b.normOff);
-    const eastComps = normalized.filter(c => c.normOff >= 0).sort((a, b) => a.normOff - b.normOff);
+    const leftCards = tz.comparisons.filter((_, i) => i % 2 === 0);
+    const rightCards = tz.comparisons.filter((_, i) => i % 2 === 1);
+    const addOnLeft = tz.comparisons.length % 2 === 0;
 
     const sideCard = (c) => (
-      <TimeCard key={c.tz.id} tz={c.tz} minutes={c.minutes} dayDelta={c.dayDelta}
-        onSelect={(e) => openPicker({ kind: 'slot', slot: c.tz.id }, e)} onRemove={tz.removeComparison} />
+      <TimeCard key={c.stored} tz={c.tz} minutes={c.minutes} dayDelta={c.dayDelta}
+        onSelect={(e) => openPicker({ kind: 'slot', slot: c.stored }, e)} onRemove={() => tz.removeComparison(c.stored)} />
     );
 
     return (
@@ -1063,24 +1130,37 @@ function TimezonePlannerApp() {
         <div className="grain absolute inset-0 pointer-events-none" />
         <header className="px-8 pt-6 pb-4 flex items-center justify-between relative z-10 max-w-[1400px] mx-auto">
           <div>
-            <div className="font-serif-display text-[32px] leading-none italic">Meridian</div>
+            <div className="flex items-center gap-3">
+              <svg width="30" height="30" viewBox="-5 -10 110 115" fill="currentColor" style={{ opacity: 0.75, flexShrink: 0 }}>
+                <path d="m91 49.98c0-14.781-7.8594-27.75-19.621-34.969-0.011718 0-0.011718-0.011719-0.011718-0.011719h-0.011719c-6.2148-3.8086-13.535-6.0195-21.355-6.0195-22.609 0-41 18.391-41 41s18.391 41 41 41c3.9883 0 7.9297-0.57812 11.719-1.7109 2.6211 1.1289 5.3984 1.7109 8.2812 1.7109 11.578 0 21-9.4219 21-21 0-2.8789-0.57812-5.6719-1.7109-8.2812 1.1328-3.7891 1.7109-7.7305 1.7109-11.719zm-2 0c0 3.0781-0.35938 6.1211-1.0703 9.0781-0.039063-0.070313-0.10156-0.14062-0.14063-0.21875-0.10156-0.17188-0.21094-0.32812-0.32031-0.48828-0.16016-0.23828-0.32031-0.48047-0.48828-0.71094-0.12109-0.16016-0.23828-0.32031-0.35938-0.48047-0.17188-0.21875-0.35156-0.44141-0.53125-0.66016-0.12891-0.14844-0.25-0.30078-0.37891-0.44922-0.19141-0.21094-0.39063-0.42188-0.57813-0.62891-0.12891-0.14062-0.26172-0.26953-0.39844-0.41016-0.21094-0.21094-0.44141-0.41016-0.66016-0.62109-0.12891-0.12109-0.25-0.23047-0.37891-0.35156-0.26953-0.23047-0.55078-0.44922-0.82812-0.67187-0.089844-0.070313-0.17969-0.14844-0.26953-0.21875-0.37891-0.28125-0.76953-0.55078-1.1602-0.80859-0.089844-0.058594-0.19141-0.10938-0.28125-0.17188-0.30859-0.19141-0.62109-0.37891-0.94141-0.55859-0.14844-0.078125-0.30078-0.16016-0.44922-0.23828-0.26953-0.14062-0.53906-0.28125-0.80859-0.41016-0.17188-0.078126-0.35156-0.16016-0.51953-0.23047-0.26172-0.10938-0.51953-0.23047-0.78906-0.32812-0.17969-0.070313-0.37109-0.14062-0.55078-0.21094-0.26172-0.089844-0.53125-0.17969-0.80078-0.26953-0.19141-0.058594-0.37891-0.12109-0.57031-0.17188-0.26953-0.078125-0.53906-0.14844-0.82031-0.21094-0.19141-0.050781-0.37891-0.089843-0.57812-0.12891-0.28906-0.058594-0.57812-0.10938-0.87109-0.16016-0.17969-0.03125-0.37109-0.070312-0.55078-0.089844-0.32031-0.039062-0.64062-0.078125-0.96875-0.10938-0.16016-0.011719-0.32031-0.039062-0.48047-0.050781-0.47656 0-0.96875-0.019531-1.457-0.019531-4.7109 0-9.0508 1.5781-12.551 4.1992-0.21875-0.25-0.44922-0.48828-0.69922-0.69922-0.71875-0.62891-1.5312-1.0508-2.3086-1.4492-0.75-0.39062-1.4609-0.76172-2.0195-1.2812-1-0.92188-1.5508-2.4219-1.3984-3.8281 0.16016-1.4102 1.0312-2.7305 2.2109-3.3594 0.51172-0.26953 1.0898-0.44922 1.7109-0.62891 0.53125-0.16016 1.0781-0.32031 1.6211-0.55078 1.2891-0.55078 2.7891-1.8516 2.7695-3.6992-0.011719-1.4688-0.92969-2.4609-1.7383-3.3398-0.39844-0.42969-0.78125-0.83984-1.0312-1.2695-0.82812-1.4297-0.28906-3.3906 0.10938-4.4297 0.98047-2.5312 2.8281-4.7305 5.0586-6.0312 1-0.58984 2.0781-1.0117 3.2188-1.4609 0.67969-0.26953 1.3594-0.53125 2.0312-0.83984 1.8594-0.85938 3.2305-1.8789 4.1602-3.0781 10.734 6.9648 17.855 19.035 17.855 32.746zm-62.441-31.141c2.1602 3.4883 5.9492 5.5195 9.5703 5.0586 0.76172-0.089844 1.5-0.28125 2.2188-0.46094 1.3984-0.35156 2.7109-0.69141 3.8594-0.25 1.6211 0.62891 2.8203 2.9805 2.7891 5.4492-0.03125 2.7617-1.3789 5.1797-2.5 6.7305-1.0195 1.4102-2.1914 2.6016-3.4414 3.8711-0.5 0.5-0.98828 1.0117-1.4688 1.5195-1.5195 1.6289-3.3906 3.8594-4.3789 6.7109-0.89062 2.5508-1 5.5117-0.32031 8.1211 0.14844 0.58984 0.35156 1.1914 0.53906 1.7891 0.57812 1.7891 1.1211 3.4805 0.57031 4.9297-0.66016 1.7305-2.7188 2.0898-4.3516 1.6914-0.67188-0.17188-1.3516-0.41016-2.0586-0.67188-1.3789-0.51172-2.8008-1.0195-4.3594-0.98047-3.4492 0.10938-6.0781 3.0117-7.5898 6.0508-2.957-5.5-4.6367-11.77-4.6367-18.418 0-12.711 6.1211-24.02 15.559-31.141zm23.441 70.141c-13.98 0-26.27-7.3984-33.148-18.488 0.03125-0.050782 0.058594-0.089844 0.078126-0.14063 1.0898-2.7188 3.3984-5.9297 6.3516-6.0195 1.1484-0.039062 2.3594 0.39844 3.6094 0.85938 0.73047 0.26953 1.4883 0.53906 2.2695 0.73828 2.4609 0.60156 5.6094-0.050782 6.6914-2.9102 0.80859-2.1016 0.10156-4.3086-0.53125-6.25-0.17969-0.55859-0.35937-1.1289-0.51172-1.6797-0.58984-2.2383-0.48828-4.7695 0.26953-6.9492 0.85938-2.4805 2.4805-4.4297 3.9609-6 0.46875-0.5 0.96094-1 1.4414-1.4883 1.2383-1.2617 2.5312-2.5703 3.6406-4.1016 1.2891-1.7812 2.8398-4.5898 2.8789-7.8789 0.03125-2.8398-1.3516-6.2812-4.0703-7.3398-1.7383-0.66016-3.4297-0.23047-5.0703 0.17969-0.69141 0.17188-1.3398 0.33984-1.9688 0.42188-2.8906 0.35938-5.9609-1.3398-7.6914-4.25 6.2305-4.2188 13.73-6.6797 21.809-6.6797 7.0703 0 13.711 1.8984 19.441 5.2109-0.73047 0.87109-1.8008 1.6211-3.2812 2.3086-0.62891 0.28906-1.2812 0.53906-1.9297 0.80078-1.1602 0.46094-2.3594 0.92969-3.5 1.5898-2.6094 1.5195-4.7695 4.0781-5.9219 7.0312-0.91016 2.3789-0.89844 4.5586 0.03125 6.1484 0.35938 0.62891 0.82812 1.1406 1.2891 1.6289 0.64844 0.69922 1.1992 1.3008 1.2109 1.9883 0.011719 0.80859-0.78125 1.5117-1.5586 1.8516-0.42969 0.19141-0.89844 0.32812-1.3984 0.46875-0.69141 0.19922-1.3984 0.41016-2.1016 0.78906-1.7617 0.94922-3.0117 2.8203-3.25 4.8984-0.23047 2.0586 0.55078 4.1797 2.0312 5.5312 0.75 0.69922 1.6211 1.1484 2.4492 1.5781 0.71094 0.37109 1.3789 0.71094 1.9297 1.1914 0.16016 0.12891 0.30078 0.30078 0.44922 0.46094-4.2305 3.8398-6.8984 9.3711-6.8984 15.52 0 0.48828 0.019531 0.98047 0.050781 1.4609 0.011719 0.16016 0.03125 0.32031 0.050781 0.48047 0.03125 0.32031 0.058594 0.64844 0.10938 0.96875 0.03125 0.19141 0.058593 0.37109 0.089843 0.55078 0.050781 0.28906 0.10156 0.57812 0.16016 0.87109 0.039062 0.19141 0.089843 0.37891 0.12891 0.57812 0.070312 0.26953 0.14062 0.55078 0.21094 0.82031 0.050781 0.19141 0.10938 0.37891 0.17188 0.57031 0.078125 0.26953 0.17188 0.53125 0.26953 0.78906 0.070312 0.19141 0.14062 0.37109 0.21094 0.55859 0.10156 0.26172 0.21094 0.51953 0.32812 0.78125 0.078125 0.17969 0.14844 0.35156 0.23047 0.53125 0.12891 0.26953 0.26172 0.53125 0.39844 0.80078 0.078125 0.14844 0.16016 0.30859 0.23828 0.46094 0.17187 0.30859 0.35937 0.60938 0.53906 0.91016 0.058594 0.10156 0.12109 0.19922 0.17969 0.30078 0.26172 0.39062 0.51953 0.78125 0.80859 1.1602 0.078125 0.10156 0.16016 0.19922 0.23828 0.30859 0.21094 0.26953 0.42188 0.53906 0.64063 0.80078 0.12109 0.14062 0.23828 0.26953 0.35937 0.39844 0.19922 0.21875 0.39063 0.42969 0.60156 0.64063 0.14062 0.14062 0.28125 0.28125 0.42188 0.41016 0.19922 0.19141 0.39844 0.37891 0.60938 0.57031 0.14844 0.12891 0.30859 0.26953 0.46094 0.39844 0.21094 0.17969 0.42969 0.35156 0.64063 0.51953 0.16016 0.12109 0.32031 0.25 0.48828 0.37109 0.23047 0.16016 0.46094 0.32031 0.69141 0.48047 0.17188 0.10937 0.32812 0.21875 0.5 0.32812 0.070313 0.039063 0.14062 0.089844 0.21094 0.14063-2.918 0.66016-5.9609 1.0195-9.0391 1.0195zm20 0c-2.7305 0-5.3516-0.57031-7.8086-1.6797-6.8008-3.0625-11.191-9.8594-11.191-17.32 0-10.48 8.5195-19 19-19 0.92969 0 1.8516 0.070312 2.7617 0.19922 0.55078 0.078124 1.0781 0.19141 1.6211 0.32031 5.6484 1.3398 10.488 5.2305 12.941 10.672 1.1211 2.4609 1.6797 5.0781 1.6797 7.8086-0.003906 10.48-8.5234 19-19.004 19zm8.7109-11.699c0.39062 0.39062 0.39062 1.0195 0 1.4102-0.19922 0.19922-0.44922 0.28906-0.71094 0.28906s-0.51172-0.10156-0.71094-0.28906l-8-8c-0.17969-0.19141-0.28906-0.44141-0.28906-0.71094v-10c0-0.55078 0.44922-1 1-1s1 0.44922 1 1v9.5898z"/>
+              </svg>
+              <div className="font-serif-display text-[32px] leading-none italic">Meridian</div>
+            </div>
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] mt-1.5" style={{ color: 'var(--fg-faint)' }}>timezone planner</div>
           </div>
           {LiveBadge}
         </header>
         <div className="max-w-[1400px] mx-auto px-8 pb-16 pt-4 relative z-10">
           <div className="grid gap-6" style={{ gridTemplateColumns: '1fr minmax(460px, 540px) 1fr' }}>
-            <div className="flex flex-col gap-3">{westComps.map(sideCard)}{AddBtn}</div>
+            <div className="flex flex-col gap-3">{leftCards.map(sideCard)}{addOnLeft && AddBtn}</div>
             <div className="flex flex-col items-stretch gap-2">
               <SemicircleControl anchorMinutes={tz.anchorMinutes} onScrub={tz.scrub} anchor={tz.anchor}
                 anchorFmt={anchorFmt} onAnchorClick={(e) => openPicker({ kind: 'anchor' }, e)}
                 dayOffset={tz.dayOffset} anchorDateStr={anchorDateStr} maxW={500} />
             </div>
-            <div className="flex flex-col gap-3">{eastComps.map(sideCard)}{AddBtn}</div>
+            <div className="flex flex-col gap-3">{rightCards.map(sideCard)}{!addOnLeft && AddBtn}</div>
           </div>
         </div>
         <TimezonePicker open={picker !== null} variant="popover" anchorRect={picker?.rect}
-          onClose={closePicker} title={pickerTitle} excludeIds={pickerExcludes} onSelect={handlePickerSelect} />
+          onClose={closePicker} title={pickerTitle} excludeIds={pickerExcludes} onSelect={handlePickerSelect}
+          cityLibrary={cityLibrary} />
+        <footer className="pb-8 pt-2 text-center relative z-10 max-w-[1400px] mx-auto px-8">
+          <a href="https://samirhusain.info" target="_blank" rel="noopener noreferrer"
+            className="font-mono text-[10px] uppercase tracking-[0.2em]"
+            style={{ color: 'var(--fg-faint)' }}>
+            developed by samir husain
+          </a>
+        </footer>
       </div>
     );
   }
@@ -1091,7 +1171,12 @@ function TimezonePlannerApp() {
       <div className="grain absolute inset-0 pointer-events-none" />
       <header className="px-5 pt-6 pb-2 flex items-center justify-between relative z-10">
         <div>
-          <div className="font-serif-display text-[28px] leading-none italic">Meridian</div>
+          <div className="flex items-center gap-2.5">
+            <svg width="26" height="26" viewBox="-5 -10 110 115" fill="currentColor" style={{ opacity: 0.75, flexShrink: 0 }}>
+              <path d="m91 49.98c0-14.781-7.8594-27.75-19.621-34.969-0.011718 0-0.011718-0.011719-0.011718-0.011719h-0.011719c-6.2148-3.8086-13.535-6.0195-21.355-6.0195-22.609 0-41 18.391-41 41s18.391 41 41 41c3.9883 0 7.9297-0.57812 11.719-1.7109 2.6211 1.1289 5.3984 1.7109 8.2812 1.7109 11.578 0 21-9.4219 21-21 0-2.8789-0.57812-5.6719-1.7109-8.2812 1.1328-3.7891 1.7109-7.7305 1.7109-11.719zm-2 0c0 3.0781-0.35938 6.1211-1.0703 9.0781-0.039063-0.070313-0.10156-0.14062-0.14063-0.21875-0.10156-0.17188-0.21094-0.32812-0.32031-0.48828-0.16016-0.23828-0.32031-0.48047-0.48828-0.71094-0.12109-0.16016-0.23828-0.32031-0.35938-0.48047-0.17188-0.21875-0.35156-0.44141-0.53125-0.66016-0.12891-0.14844-0.25-0.30078-0.37891-0.44922-0.19141-0.21094-0.39063-0.42188-0.57813-0.62891-0.12891-0.14062-0.26172-0.26953-0.39844-0.41016-0.21094-0.21094-0.44141-0.41016-0.66016-0.62109-0.12891-0.12109-0.25-0.23047-0.37891-0.35156-0.26953-0.23047-0.55078-0.44922-0.82812-0.67187-0.089844-0.070313-0.17969-0.14844-0.26953-0.21875-0.37891-0.28125-0.76953-0.55078-1.1602-0.80859-0.089844-0.058594-0.19141-0.10938-0.28125-0.17188-0.30859-0.19141-0.62109-0.37891-0.94141-0.55859-0.14844-0.078125-0.30078-0.16016-0.44922-0.23828-0.26953-0.14062-0.53906-0.28125-0.80859-0.41016-0.17188-0.078126-0.35156-0.16016-0.51953-0.23047-0.26172-0.10938-0.51953-0.23047-0.78906-0.32812-0.17969-0.070313-0.37109-0.14062-0.55078-0.21094-0.26172-0.089844-0.53125-0.17969-0.80078-0.26953-0.19141-0.058594-0.37891-0.12109-0.57031-0.17188-0.26953-0.078125-0.53906-0.14844-0.82031-0.21094-0.19141-0.050781-0.37891-0.089843-0.57812-0.12891-0.28906-0.058594-0.57812-0.10938-0.87109-0.16016-0.17969-0.03125-0.37109-0.070312-0.55078-0.089844-0.32031-0.039062-0.64062-0.078125-0.96875-0.10938-0.16016-0.011719-0.32031-0.039062-0.48047-0.050781-0.47656 0-0.96875-0.019531-1.457-0.019531-4.7109 0-9.0508 1.5781-12.551 4.1992-0.21875-0.25-0.44922-0.48828-0.69922-0.69922-0.71875-0.62891-1.5312-1.0508-2.3086-1.4492-0.75-0.39062-1.4609-0.76172-2.0195-1.2812-1-0.92188-1.5508-2.4219-1.3984-3.8281 0.16016-1.4102 1.0312-2.7305 2.2109-3.3594 0.51172-0.26953 1.0898-0.44922 1.7109-0.62891 0.53125-0.16016 1.0781-0.32031 1.6211-0.55078 1.2891-0.55078 2.7891-1.8516 2.7695-3.6992-0.011719-1.4688-0.92969-2.4609-1.7383-3.3398-0.39844-0.42969-0.78125-0.83984-1.0312-1.2695-0.82812-1.4297-0.28906-3.3906 0.10938-4.4297 0.98047-2.5312 2.8281-4.7305 5.0586-6.0312 1-0.58984 2.0781-1.0117 3.2188-1.4609 0.67969-0.26953 1.3594-0.53125 2.0312-0.83984 1.8594-0.85938 3.2305-1.8789 4.1602-3.0781 10.734 6.9648 17.855 19.035 17.855 32.746zm-62.441-31.141c2.1602 3.4883 5.9492 5.5195 9.5703 5.0586 0.76172-0.089844 1.5-0.28125 2.2188-0.46094 1.3984-0.35156 2.7109-0.69141 3.8594-0.25 1.6211 0.62891 2.8203 2.9805 2.7891 5.4492-0.03125 2.7617-1.3789 5.1797-2.5 6.7305-1.0195 1.4102-2.1914 2.6016-3.4414 3.8711-0.5 0.5-0.98828 1.0117-1.4688 1.5195-1.5195 1.6289-3.3906 3.8594-4.3789 6.7109-0.89062 2.5508-1 5.5117-0.32031 8.1211 0.14844 0.58984 0.35156 1.1914 0.53906 1.7891 0.57812 1.7891 1.1211 3.4805 0.57031 4.9297-0.66016 1.7305-2.7188 2.0898-4.3516 1.6914-0.67188-0.17188-1.3516-0.41016-2.0586-0.67188-1.3789-0.51172-2.8008-1.0195-4.3594-0.98047-3.4492 0.10938-6.0781 3.0117-7.5898 6.0508-2.957-5.5-4.6367-11.77-4.6367-18.418 0-12.711 6.1211-24.02 15.559-31.141zm23.441 70.141c-13.98 0-26.27-7.3984-33.148-18.488 0.03125-0.050782 0.058594-0.089844 0.078126-0.14063 1.0898-2.7188 3.3984-5.9297 6.3516-6.0195 1.1484-0.039062 2.3594 0.39844 3.6094 0.85938 0.73047 0.26953 1.4883 0.53906 2.2695 0.73828 2.4609 0.60156 5.6094-0.050782 6.6914-2.9102 0.80859-2.1016 0.10156-4.3086-0.53125-6.25-0.17969-0.55859-0.35937-1.1289-0.51172-1.6797-0.58984-2.2383-0.48828-4.7695 0.26953-6.9492 0.85938-2.4805 2.4805-4.4297 3.9609-6 0.46875-0.5 0.96094-1 1.4414-1.4883 1.2383-1.2617 2.5312-2.5703 3.6406-4.1016 1.2891-1.7812 2.8398-4.5898 2.8789-7.8789 0.03125-2.8398-1.3516-6.2812-4.0703-7.3398-1.7383-0.66016-3.4297-0.23047-5.0703 0.17969-0.69141 0.17188-1.3398 0.33984-1.9688 0.42188-2.8906 0.35938-5.9609-1.3398-7.6914-4.25 6.2305-4.2188 13.73-6.6797 21.809-6.6797 7.0703 0 13.711 1.8984 19.441 5.2109-0.73047 0.87109-1.8008 1.6211-3.2812 2.3086-0.62891 0.28906-1.2812 0.53906-1.9297 0.80078-1.1602 0.46094-2.3594 0.92969-3.5 1.5898-2.6094 1.5195-4.7695 4.0781-5.9219 7.0312-0.91016 2.3789-0.89844 4.5586 0.03125 6.1484 0.35938 0.62891 0.82812 1.1406 1.2891 1.6289 0.64844 0.69922 1.1992 1.3008 1.2109 1.9883 0.011719 0.80859-0.78125 1.5117-1.5586 1.8516-0.42969 0.19141-0.89844 0.32812-1.3984 0.46875-0.69141 0.19922-1.3984 0.41016-2.1016 0.78906-1.7617 0.94922-3.0117 2.8203-3.25 4.8984-0.23047 2.0586 0.55078 4.1797 2.0312 5.5312 0.75 0.69922 1.6211 1.1484 2.4492 1.5781 0.71094 0.37109 1.3789 0.71094 1.9297 1.1914 0.16016 0.12891 0.30078 0.30078 0.44922 0.46094-4.2305 3.8398-6.8984 9.3711-6.8984 15.52 0 0.48828 0.019531 0.98047 0.050781 1.4609 0.011719 0.16016 0.03125 0.32031 0.050781 0.48047 0.03125 0.32031 0.058594 0.64844 0.10938 0.96875 0.03125 0.19141 0.058593 0.37109 0.089843 0.55078 0.050781 0.28906 0.10156 0.57812 0.16016 0.87109 0.039062 0.19141 0.089843 0.37891 0.12891 0.57812 0.070312 0.26953 0.14062 0.55078 0.21094 0.82031 0.050781 0.19141 0.10938 0.37891 0.17188 0.57031 0.078125 0.26953 0.17188 0.53125 0.26953 0.78906 0.070312 0.19141 0.14062 0.37109 0.21094 0.55859 0.10156 0.26172 0.21094 0.51953 0.32812 0.78125 0.078125 0.17969 0.14844 0.35156 0.23047 0.53125 0.12891 0.26953 0.26172 0.53125 0.39844 0.80078 0.078125 0.14844 0.16016 0.30859 0.23828 0.46094 0.17187 0.30859 0.35937 0.60938 0.53906 0.91016 0.058594 0.10156 0.12109 0.19922 0.17969 0.30078 0.26172 0.39062 0.51953 0.78125 0.80859 1.1602 0.078125 0.10156 0.16016 0.19922 0.23828 0.30859 0.21094 0.26953 0.42188 0.53906 0.64063 0.80078 0.12109 0.14062 0.23828 0.26953 0.35937 0.39844 0.19922 0.21875 0.39063 0.42969 0.60156 0.64063 0.14062 0.14062 0.28125 0.28125 0.42188 0.41016 0.19922 0.19141 0.39844 0.37891 0.60938 0.57031 0.14844 0.12891 0.30859 0.26953 0.46094 0.39844 0.21094 0.17969 0.42969 0.35156 0.64063 0.51953 0.16016 0.12109 0.32031 0.25 0.48828 0.37109 0.23047 0.16016 0.46094 0.32031 0.69141 0.48047 0.17188 0.10937 0.32812 0.21875 0.5 0.32812 0.070313 0.039063 0.14062 0.089844 0.21094 0.14063-2.918 0.66016-5.9609 1.0195-9.0391 1.0195zm20 0c-2.7305 0-5.3516-0.57031-7.8086-1.6797-6.8008-3.0625-11.191-9.8594-11.191-17.32 0-10.48 8.5195-19 19-19 0.92969 0 1.8516 0.070312 2.7617 0.19922 0.55078 0.078124 1.0781 0.19141 1.6211 0.32031 5.6484 1.3398 10.488 5.2305 12.941 10.672 1.1211 2.4609 1.6797 5.0781 1.6797 7.8086-0.003906 10.48-8.5234 19-19.004 19zm8.7109-11.699c0.39062 0.39062 0.39062 1.0195 0 1.4102-0.19922 0.19922-0.44922 0.28906-0.71094 0.28906s-0.51172-0.10156-0.71094-0.28906l-8-8c-0.17969-0.19141-0.28906-0.44141-0.28906-0.71094v-10c0-0.55078 0.44922-1 1-1s1 0.44922 1 1v9.5898z"/>
+            </svg>
+            <div className="font-serif-display text-[28px] leading-none italic">Meridian</div>
+          </div>
           <div className="font-mono text-[10px] uppercase tracking-[0.2em] mt-1.5" style={{ color: 'var(--fg-faint)' }}>timezone planner</div>
         </div>
         {LiveBadge}
@@ -1109,14 +1194,15 @@ function TimezonePlannerApp() {
       <section className="px-4 pb-28 relative z-10">
         <div className="grid gap-2 grid-cols-2">
           {tz.comparisons.map((c) => (
-            <TimeCard key={c.tz.id} tz={c.tz} minutes={c.minutes} dayDelta={c.dayDelta}
-              onSelect={(e) => openPicker({ kind: 'slot', slot: c.tz.id }, e)} onRemove={tz.removeComparison} />
+            <TimeCard key={c.stored} tz={c.tz} minutes={c.minutes} dayDelta={c.dayDelta}
+              onSelect={(e) => openPicker({ kind: 'slot', slot: c.stored }, e)} onRemove={() => tz.removeComparison(c.stored)} />
           ))}
           {AddBtn}
         </div>
       </section>
       <TimezonePicker open={picker !== null} variant="sheet" onClose={closePicker}
-        title={pickerTitle} excludeIds={pickerExcludes} onSelect={handlePickerSelect} />
+        title={pickerTitle} excludeIds={pickerExcludes} onSelect={handlePickerSelect}
+        cityLibrary={cityLibrary} />
       <footer className="pb-8 pt-2 text-center relative z-10">
         <a href="https://samirhusain.info" target="_blank" rel="noopener noreferrer"
           className="font-mono text-[10px] uppercase tracking-[0.2em]"

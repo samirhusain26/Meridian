@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<base href="/meridian/">
+<base href="./">
+<!--base-meridian: change to /meridian/ for GitHub Pages deployment-->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Meridian — Timezone Planner</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./favicon.svg">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#28210f" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5ede0" media="(prefers-color-scheme: light)">
 
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -93,6 +99,7 @@
 <body class="min-h-screen">
   <div id="root"></div>
 
+  <script src="./data/cities.js"></script>
   <script type="text/babel" data-presets="env,react" src="./src/app.jsx"></script>
 </body>
 </html>
