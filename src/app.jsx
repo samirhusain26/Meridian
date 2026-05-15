@@ -1001,15 +1001,21 @@ function TimezonePlannerApp() {
       timeZone: tz.anchor.id, weekday: 'short', month: 'short', day: 'numeric',
     }).format(anchorDate).replace(',', '');
 
-    const fmtEntry = (name, mins, delta) => {
+    const tzAbbr = (tzId) => {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: tzId, timeZoneName: 'short' })
+        .formatToParts(anchorDate);
+      return parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+    };
+
+    const fmtEntry = (name, tzId, mins, delta) => {
       const f = formatMinutes(mins);
       const time = `${f.h12}:${f.mm}${f.ampm === 'AM' ? 'a' : 'p'}`;
       const offset = delta !== 0 ? ` (${delta > 0 ? '+' : ''}${delta})` : '';
-      return `• ${name} ${time}${offset}`;
+      return `• ${name} (${tzAbbr(tzId)}) ${time}${offset}`;
     };
 
-    const text = [shortDate, fmtEntry(tz.anchor.city, tz.anchorMinutes, tz.dayOffset),
-      ...tz.comparisons.map(c => fmtEntry(c.tz.city, c.minutes, c.dayDelta))].join('\n');
+    const text = [shortDate, fmtEntry(tz.anchor.city, tz.anchor.id, tz.anchorMinutes, tz.dayOffset),
+      ...tz.comparisons.map(c => fmtEntry(c.tz.city, c.tz.id, c.minutes, c.dayDelta))].join('\n');
 
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
