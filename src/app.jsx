@@ -120,6 +120,51 @@ const TZ_LIBRARY = [
 
 const TZ_IDS = new Set(TZ_LIBRARY.map(t => t.id));
 
+// Named abbreviations for timezones where Intl returns a GMT offset instead.
+// Keyed by IANA id. String = no DST; object = DST-aware { std, dst, stdOffsetMin }.
+const TZ_ABBR_OVERRIDES = {
+  // Africa
+  'Africa/Casablanca':     'WET',
+  'Africa/Cairo':          'EET',
+  'Africa/Lagos':          'WAT',
+  'Africa/Nairobi':        'EAT',
+  'Africa/Johannesburg':   'SAST',
+  // Europe
+  'Europe/Moscow':         'MSK',
+  'Europe/Istanbul':       'TRT',
+  // Middle East
+  'Asia/Riyadh':           'AST',
+  'Asia/Dubai':            'GST',
+  'Asia/Tehran':           { std: 'IRST', dst: 'IRDT', stdOffsetMin: 210 },
+  // South Asia
+  'Asia/Karachi':          'PKT',
+  'Asia/Kolkata':          'IST',
+  'Asia/Colombo':          'SLST',
+  'Asia/Kathmandu':        'NPT',
+  'Asia/Dhaka':            'BST',
+  'Asia/Yangon':           'MMT',
+  // Southeast Asia
+  'Asia/Bangkok':          'ICT',
+  'Asia/Ho_Chi_Minh':      'ICT',
+  'Asia/Jakarta':          'WIB',
+  'Asia/Kuala_Lumpur':     'MYT',
+  'Asia/Singapore':        'SGT',
+  'Asia/Manila':           'PST',
+  // East Asia
+  'Asia/Shanghai':         'CST',
+  'Asia/Hong_Kong':        'HKT',
+  'Asia/Taipei':           'CST',
+  'Asia/Seoul':            'KST',
+  'Asia/Tokyo':            'JST',
+  // Australia (no-DST zones; Sydney/Melbourne/Adelaide use DST so Intl handles them)
+  'Australia/Perth':       'AWST',
+  'Australia/Darwin':      'ACST',
+  'Australia/Brisbane':    'AEST',
+  // Pacific
+  'Pacific/Honolulu':      'HST',
+  'Pacific/Fiji':          'FJT',
+};
+
 // ─── City Library (lazy-loaded from data/cities.json) ────────────────────────
 
 let _mergedLibrary = null;
@@ -1004,7 +1049,20 @@ function TimezonePlannerApp() {
     const tzAbbr = (tzId) => {
       const parts = new Intl.DateTimeFormat('en-US', { timeZone: tzId, timeZoneName: 'short' })
         .formatToParts(anchorDate);
-      return parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+      const intlAbbr = parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+      if (!/^(GMT|UTC)[+-]/.test(intlAbbr)) return intlAbbr;
+      const override = TZ_ABBR_OVERRIDES[tzId];
+      if (!override) return intlAbbr;
+      if (typeof override === 'string') return override;
+      // DST-aware override: determine current offset to pick std vs dst abbreviation.
+      const offsetParts = new Intl.DateTimeFormat('en-US', { timeZone: tzId, timeZoneName: 'shortOffset' })
+        .formatToParts(anchorDate);
+      const offsetStr = offsetParts.find(p => p.type === 'timeZoneName')?.value ?? '';
+      const m = offsetStr.match(/GMT([+-])(\d+)(?::(\d+))?/);
+      if (!m) return intlAbbr;
+      const sign = m[1] === '+' ? 1 : -1;
+      const mins = sign * (parseInt(m[2], 10) * 60 + parseInt(m[3] ?? '0', 10));
+      return mins === override.stdOffsetMin ? override.std : override.dst;
     };
 
     const fmtEntry = (name, tzId, mins, delta) => {
